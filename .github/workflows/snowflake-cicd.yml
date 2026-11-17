@@ -28,6 +28,7 @@ jobs:
       TARGET_ENV: PR_${{ github.event.number }}
       REPO_PATH: "@ORCH_OPS.GIT.ORCH_REPO/commits/${{ github.event.pull_request.head.sha }}/snowflake"
     steps:
+      - uses: actions/checkout@v4
       - uses: snowflakedb/snowflake-actions@v3
         with:
           use-oidc: true
@@ -50,6 +51,7 @@ jobs:
       TARGET_ENV: DEV
       REPO_PATH: "@ORCH_OPS.GIT.ORCH_REPO/commits/${{ github.sha }}/snowflake"
     steps:
+      - uses: actions/checkout@v4
       - uses: snowflakedb/snowflake-actions@v3
         with:
           use-oidc: true
@@ -72,6 +74,7 @@ jobs:
       TARGET_ENV: PROD
       REPO_PATH: "@ORCH_OPS.GIT.ORCH_REPO/commits/${{ github.sha }}/snowflake"
     steps:
+      - uses: actions/checkout@v4
       - uses: snowflakedb/snowflake-actions@v3
         with:
           use-oidc: true
