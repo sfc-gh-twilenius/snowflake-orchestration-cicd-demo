@@ -24,7 +24,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     env:
-      SNOWFLAKE_ROLE: ORCH_MR_DEPLOYER
+      SNOWFLAKE_ROLE: ORCH_DEPLOYER   # demo: separate MR-only role recommended in production
       TARGET_ENV: PR_${{ github.event.number }}
       REPO_PATH: "@ORCH_OPS.GIT.ORCH_REPO/commits/${{ github.event.pull_request.head.sha }}/snowflake"
     steps:
