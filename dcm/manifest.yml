@@ -1,0 +1,28 @@
+manifest_version: 2
+type: DCM_PROJECT
+default_target: DEV
+
+targets:
+  DEV:
+    account_identifier: <ORG>-<ACCOUNT>
+    project_name: ORCH_OPS.DCM.ORCH_PIPELINE_DEV
+    project_owner: ORCH_DEPLOYER
+    templating_config: DEV
+  PROD:
+    account_identifier: <ORG>-<ACCOUNT>
+    project_name: ORCH_OPS.DCM.ORCH_PIPELINE_PROD
+    project_owner: ORCH_DEPLOYER
+    templating_config: PROD
+
+templating:
+  defaults:
+    warehouse: ORCH_WH
+  configurations:
+    DEV:
+      env_suffix: "_DEV"
+      target_lag: "1 hour"
+      task_state: SUSPENDED
+    PROD:
+      env_suffix: ""
+      target_lag: "1 minute"
+      task_state: STARTED

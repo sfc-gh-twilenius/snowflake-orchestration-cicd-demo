@@ -1,0 +1,84 @@
+# Same flow as .gitlab-ci.yml, for a live demo on GitHub.
+#   PR   -> clone PROD into ORCH_PR_<number> -> deploy PR commit -> test   (OIDC, subject repo:<o>/<r>:pull_request)
+#   main -> deploy DEV (subject ...:ref:refs/heads/main) -> [approval] -> deploy PROD (subject ...:environment:production)
+name: snowflake-cicd
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}   # repo variable, e.g. MYORG-MYACCOUNT
+  SNOWFLAKE_WAREHOUSE: ORCH_WH
+  GIT_REPO: ORCH_OPS.GIT.ORCH_REPO
+
+jobs:
+  pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      SNOWFLAKE_ROLE: ORCH_MR_DEPLOYER
+      TARGET_ENV: PR_${{ github.event.number }}
+      REPO_PATH: "@ORCH_OPS.GIT.ORCH_REPO/commits/${{ github.event.pull_request.head.sha }}/snowflake"
+    steps:
+      - uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+      - run: snow connection test -x
+      - name: Ephemeral environment (zero-copy clone of PROD)
+        run: snow sql -x -q "CREATE DATABASE IF NOT EXISTS ORCH_${TARGET_ENV} CLONE ORCH_PROD"
+      - name: Deploy PR commit
+        run: |
+          snow sql -x -q "ALTER GIT REPOSITORY ${GIT_REPO} FETCH"
+          snow sql -x -q "EXECUTE IMMEDIATE FROM ${REPO_PATH}/deploy.sql USING (env => '${TARGET_ENV}')"
+      - name: Test
+        run: snow sql -x -q "EXECUTE IMMEDIATE FROM ${REPO_PATH}/tests/test_pipeline.sql USING (env => '${TARGET_ENV}')"
+
+  # main -> DEV: no GitHub environment, OIDC subject = repo:<o>/<r>:ref:refs/heads/main (SVC_GITHUB_MAIN)
+  deploy-dev:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      SNOWFLAKE_ROLE: ORCH_DEPLOYER
+      TARGET_ENV: DEV
+      REPO_PATH: "@ORCH_OPS.GIT.ORCH_REPO/commits/${{ github.sha }}/snowflake"
+    steps:
+      - uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+      - run: snow connection test -x
+      - name: Deploy
+        run: |
+          snow sql -x -q "ALTER GIT REPOSITORY ${GIT_REPO} FETCH"
+          snow sql -x -q "EXECUTE IMMEDIATE FROM ${REPO_PATH}/deploy.sql USING (env => '${TARGET_ENV}')"
+      - name: Test
+        run: snow sql -x -q "EXECUTE IMMEDIATE FROM ${REPO_PATH}/tests/test_pipeline.sql USING (env => '${TARGET_ENV}')"
+
+  # DEV -> PROD: 'production' environment (required reviewer = approval gate).
+  # With an environment the OIDC subject becomes repo:<o>/<r>:environment:production (SVC_GITHUB_PROD)
+  deploy-prod:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SNOWFLAKE_ROLE: ORCH_DEPLOYER
+      TARGET_ENV: PROD
+      REPO_PATH: "@ORCH_OPS.GIT.ORCH_REPO/commits/${{ github.sha }}/snowflake"
+    steps:
+      - uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+      - run: snow connection test -x
+      - name: Deploy
+        run: |
+          snow sql -x -q "ALTER GIT REPOSITORY ${GIT_REPO} FETCH"
+          snow sql -x -q "EXECUTE IMMEDIATE FROM ${REPO_PATH}/deploy.sql USING (env => '${TARGET_ENV}')"
+      - name: Test
+        run: snow sql -x -q "EXECUTE IMMEDIATE FROM ${REPO_PATH}/tests/test_pipeline.sql USING (env => '${TARGET_ENV}')"

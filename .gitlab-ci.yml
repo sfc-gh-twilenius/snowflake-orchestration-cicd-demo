@@ -1,0 +1,125 @@
+# =====================================================================
+# Snowflake CI/CD with GitLab
+#   MR      -> zero-copy clone of PROD (ORCH_MR_<iid>) -> deploy branch -> test -> auto-drop on merge/close
+#   main    -> deploy DEV -> test DEV -> [manual approval] -> deploy PROD -> test PROD
+# Code is executed *inside Snowflake* from the Git repository clone (EXECUTE IMMEDIATE FROM),
+# pinned to the exact commit SHA of the pipeline.
+# =====================================================================
+
+include:
+  # Official Snowflake CI/CD component: installs Snowflake CLI + OIDC (ID token) wiring
+  - component: $CI_SERVER_FQDN/snowflake-dev/snowflake-cicd-component/configure-snowflake-cli@1.1.0
+    inputs:
+      use-oidc: true
+      template-only: true          # we extend .configure-snowflake-cli in our own jobs
+
+variables:
+  # SNOWFLAKE_ACCOUNT: set as a project CI/CD variable (e.g. MYORG-MYACCOUNT)
+  SNOWFLAKE_ROLE: "ORCH_DEPLOYER"
+  SNOWFLAKE_WAREHOUSE: "ORCH_WH"
+  GIT_REPO: "ORCH_OPS.GIT.ORCH_REPO"
+  REPO_PATH: "@${GIT_REPO}/commits/${CI_COMMIT_SHA}/snowflake"
+
+stages: [validate, deploy, test, cleanup]
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------- Reusable snippets ----------
+.snow_deploy: &snow_deploy
+  - snow sql -x -q "ALTER GIT REPOSITORY ${GIT_REPO} FETCH"
+  - snow sql -x -q "EXECUTE IMMEDIATE FROM ${REPO_PATH}/deploy.sql USING (env => '${TARGET_ENV}')"
+
+.snow_test: &snow_test
+  - snow sql -x -q "EXECUTE IMMEDIATE FROM ${REPO_PATH}/tests/test_pipeline.sql USING (env => '${TARGET_ENV}')"
+
+# MR jobs: key-pair user (MR subject = source branch, can't be pinned for OIDC)
+.mr_job:
+  image: python:3.12-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    TARGET_ENV: "MR_${CI_MERGE_REQUEST_IID}"
+    SNOWFLAKE_USER: "SVC_GITLAB_MR"
+    SNOWFLAKE_ROLE: "ORCH_MR_DEPLOYER"
+    SNOWFLAKE_AUTHENTICATOR: "SNOWFLAKE_JWT"
+    # SNOWFLAKE_PRIVATE_KEY_FILE: GitLab CI/CD *File* variable, masked (Settings > CI/CD > Variables)
+  before_script:
+    - pip install --quiet snowflake-cli
+    - snow connection test -x
+
+# ---------- Validate (every pipeline) ----------
+lint:
+  stage: validate
+  image: python:3.12-slim
+  script:
+    - pip install --quiet sqlfluff
+    - sqlfluff lint snowflake/ --dialect snowflake --templater jinja --rules LT01,LT02,CP01 || true   # advisory in the demo
+
+# ---------- Merge request: ephemeral environment ----------
+mr:deploy:
+  extends: .mr_job
+  stage: deploy
+  environment:
+    name: review/mr-$CI_MERGE_REQUEST_IID
+    on_stop: mr:drop
+  script:
+    - snow sql -x -q "CREATE DATABASE IF NOT EXISTS ORCH_${TARGET_ENV} CLONE ORCH_PROD"   # zero-copy, seconds
+    - *snow_deploy
+
+mr:test:
+  extends: .mr_job
+  stage: test
+  needs: [mr:deploy]
+  script:
+    - *snow_test
+
+mr:drop:
+  extends: .mr_job
+  stage: cleanup
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual          # also triggered automatically when the MR is merged/closed (environment on_stop)
+  environment:
+    name: review/mr-$CI_MERGE_REQUEST_IID
+    action: stop
+  script:
+    - snow sql -x -q "DROP DATABASE IF EXISTS ORCH_${TARGET_ENV}"
+
+# ---------- main: DEV -> PROD ----------
+dev:deploy:
+  extends: .configure-snowflake-cli     # OIDC, subject ...:ref_type:branch:ref:main
+  stage: deploy
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  environment: { name: dev }
+  variables: { TARGET_ENV: "DEV" }
+  script:
+    - snow connection test -x
+    - *snow_deploy
+
+dev:test:
+  extends: .configure-snowflake-cli
+  stage: test
+  needs: [dev:deploy]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  variables: { TARGET_ENV: "DEV" }
+  script:
+    - *snow_test
+
+prod:deploy:
+  extends: .configure-snowflake-cli
+  stage: deploy
+  needs: [dev:test]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual                       # approval gate (pair with a protected environment)
+  allow_failure: false
+  environment: { name: production }
+  variables: { TARGET_ENV: "PROD" }
+  script:
+    - *snow_deploy
+    - *snow_test
