@@ -43,6 +43,9 @@ CREATE USER IF NOT EXISTS SVC_GITLAB_MR
 GRANT ROLE ORCH_MR_DEPLOYER TO USER SVC_GITLAB_MR;
 
 -- ---------- GitHub (live demo variant) ----------
+-- NOTE: newer GitHub repos/orgs send *immutable* subjects that include numeric IDs, e.g.
+--   repo:<owner>@<owner_id>/<repo>@<repo_id>:ref:refs/heads/main
+-- Copy the exact subject from the first failed `snow connection test` error if unsure.
 -- GitHub's PR subject is stable ('pull_request'), so both users can be OIDC.
 CREATE USER IF NOT EXISTS SVC_GITHUB_MAIN
   TYPE = SERVICE DEFAULT_ROLE = ORCH_DEPLOYER DEFAULT_WAREHOUSE = ORCH_WH
