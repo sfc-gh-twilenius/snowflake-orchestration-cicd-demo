@@ -18,7 +18,8 @@ AS
 SELECT o.order_ts::DATE AS order_date,
        c.country,
        COUNT(*)         AS orders,
-       SUM(o.amount)    AS revenue
+       SUM(o.amount)    AS revenue,
+       ROUND(AVG(o.amount), 2) AS avg_order_value
 FROM ORCH_{{ env }}.MART.DT_ORDERS o
 JOIN ORCH_{{ env }}.RAW.CUSTOMERS c ON c.customer_id = o.customer_id
 WHERE o.status <> 'CANCELLED'
